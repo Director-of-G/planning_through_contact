@@ -33,6 +33,7 @@ class ReachableSet:
         q_sim: QuasistaticSimulatorCpp,
         rrt_params: IrsRrtParams,
         sim_params: QuasistaticSimParameters,
+        use_rpy_reachable_set: bool = False,
     ):
         self.q_sim = q_sim
         self.plant = q_sim.get_plant()
@@ -51,6 +52,13 @@ class ReachableSet:
         self.dim_x = self.plant.num_positions()
         self.dim_u = self.q_sim.num_actuated_dofs()
         self.dim_q_u = self.dim_x - self.dim_u
+
+        if use_rpy_reachable_set:
+            self.dim_x += 1
+            self.dim_q_u += 1
+            self.q_u_indices_into_x = [0, 1, 2, 3]
+
+        self.use_rpy_reachable_set = use_rpy_reachable_set
 
     def calc_exact_Bc(self, q, ubar):
         """

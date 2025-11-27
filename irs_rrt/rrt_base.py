@@ -179,6 +179,7 @@ class Rrt:
         Evaluate termination criteria for RRT using global distance metric.
         """
         dist_batch = self.calc_distance_batch(self.rrt_params.goal)
+        print(np.min(dist_batch))
         return np.min(dist_batch) < self.rrt_params.termination_tolerance
 
     def rewire(self, parent_node: Node, child_node: Node):

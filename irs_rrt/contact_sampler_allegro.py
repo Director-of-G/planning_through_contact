@@ -49,6 +49,7 @@ class AllegroHandContactSampler(ContactSampler):
         self.sim_params.gradient_mode = GradientMode.kNone
         self.sim_params.calc_contact_forces = False
         self.sim_params.h = 0.1
+        self.sim_params.use_free_solvers = True
 
     def simulate_qdot(self, x0, qdot, T):
         x = np.copy(x0)

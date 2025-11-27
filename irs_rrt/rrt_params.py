@@ -63,7 +63,7 @@ class IrsRrtParams(RrtParams):
 
         # When set to True, this field ensures that Gurobi and Mosek are not
         # used anywhere.
-        self.use_free_solvers = False
+        self.use_free_solvers = True
 
 
 class IrsRrtProjectionParams(IrsRrtParams):

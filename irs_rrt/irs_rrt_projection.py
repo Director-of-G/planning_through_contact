@@ -24,9 +24,10 @@ class IrsRrtProjection(IrsRrt):
         contact_sampler: ContactSampler,
         q_sim,
         q_sim_py: QuasistaticSimulator,
+        use_rpy_reachable_set: bool = False,
     ):
         self.contact_sampler = contact_sampler
-        super().__init__(rrt_params, q_sim, q_sim_py)
+        super().__init__(rrt_params, q_sim, q_sim_py, use_rpy_reachable_set)
         self.solver = GurobiSolver()
 
     def select_closest_node(

@@ -9,6 +9,7 @@ import numpy as np
 from pydrake.all import Quaternion, AngleAxis
 
 from irs_rrt.reachable_set import ReachableSet
+from irs_rrt.reachable_set_3d_rpy import ReachableSet3DRPY
 from irs_rrt.rrt_base import Node, Edge, Rrt
 from irs_rrt.rrt_params import IrsRrtParams
 from irs_mpc2.irs_mpc_params import (
@@ -18,6 +19,7 @@ from irs_mpc2.irs_mpc_params import (
     kAnalyticSmoothingModes,
     kSmoothingMode2ForwardDynamicsModeMap,
 )
+from irs_rrt.allegro_3d_rpy_helper import convert_state_quat_to_rpy
 
 from qsim.simulator import QuasistaticSimulator, InternalVisualizationType
 from qsim_cpp import QuasistaticSimulatorCpp
@@ -69,6 +71,7 @@ class IrsRrt(Rrt):
         rrt_params: IrsRrtParams,
         q_sim: QuasistaticSimulatorCpp,
         q_sim_py: QuasistaticSimulator,
+        use_rpy_reachable_set: bool = False,
     ):
         self.q_sim = q_sim
         self.plant = q_sim.get_plant()
@@ -89,14 +92,26 @@ class IrsRrt(Rrt):
 
         # TODO(pang): what does self.load_params() do?
         self.rrt_params = self.load_joint_limits_dict(rrt_params)
-        self.reachable_set = ReachableSet(
-            q_sim=q_sim, rrt_params=rrt_params, sim_params=self.sim_params
-        )
+        
+        if use_rpy_reachable_set:
+            self.reachable_set = ReachableSet3DRPY(
+                q_sim=q_sim, rrt_params=rrt_params, sim_params=self.sim_params
+            )
+        else:
+            self.reachable_set = ReachableSet(
+                q_sim=q_sim, rrt_params=rrt_params, sim_params=self.sim_params
+            )
+
         self.max_size = rrt_params.max_size
 
-        self.dim_x = self.plant.num_positions()
-        self.dim_u = self.q_sim.num_actuated_dofs()
-        self.dim_q_u = self.dim_x - self.dim_u
+        if use_rpy_reachable_set:
+            self.dim_x = self.plant.num_positions() + 1
+            self.dim_u = self.q_sim.num_actuated_dofs()
+            self.dim_q_u = self.dim_x - self.dim_u
+        else:
+            self.dim_x = self.plant.num_positions()
+            self.dim_u = self.q_sim.num_actuated_dofs()
+            self.dim_q_u = self.dim_x - self.dim_u
 
         self.q_lb, self.q_ub = self.get_joint_limits()
 
@@ -112,7 +127,14 @@ class IrsRrt(Rrt):
         self.q_u_indices_into_x = self.q_sim.get_q_u_indices_into_q()
         self.q_a_indices_into_x = self.q_sim.get_q_a_indices_into_q()
 
+        if use_rpy_reachable_set:
+            self.q_u_indices_into_x = [0, 1, 2, 3]
+            self.q_a_indices_into_x = list(
+                set(range(self.dim_x)) - set(self.q_u_indices_into_x)
+            )
+
         self.calc_q_u_diff = self.get_calc_q_u_diff()
+        self.use_rpy_reachable_set = use_rpy_reachable_set
 
         super().__init__(rrt_params)
 
@@ -167,7 +189,8 @@ class IrsRrt(Rrt):
         Given a node which has a q, this method populates the rest of the
         node parameters using reachable set computations.
         """
-        node.ubar = node.q[self.q_sim.get_q_a_indices_into_q()]
+        # node.ubar = node.q[self.q_sim.get_q_a_indices_into_q()]
+        node.ubar = node.q[self.q_a_indices_into_x]
 
         # For q_u and q_a.
         if self.rrt_params.smoothing_mode in kNoSmoothingModes:
@@ -220,7 +243,11 @@ class IrsRrt(Rrt):
 
     def add_node(self, node: IrsNode, draw_node: bool = False):
         if draw_node:
-            self.q_sim_py.update_mbp_positions_from_vector(node.q)
+            if self.use_rpy_reachable_set:
+                node_q = convert_state_quat_to_rpy(node.q)
+            else:
+                node_q = node.q
+            self.q_sim_py.update_mbp_positions_from_vector(node_q)
             self.q_sim_py.draw_current_configuration()
         self.populate_node_parameters(node)  # exception may be thrown here.
 
@@ -371,6 +398,10 @@ class IrsRrt(Rrt):
             )
         elif distance_metric == "local_u":
             return self.calc_distance_batch_local(
+                q_query, n_nodes, is_q_u_only=True
+            )
+        elif distance_metric == "quat_diff":
+            return self.calc_distance_batch_quat_diff(
                 q_query, n_nodes, is_q_u_only=True
             )
         else:

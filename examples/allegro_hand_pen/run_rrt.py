@@ -120,6 +120,9 @@ q_vis.draw_goal_triad(length=0.4, radius=0.01, opacity=0.7,
     X_WG=RigidTransform(Q_WB_d, np.array([0.15, 0.15, 0.15])))
 prob_rrt.iterate()
 
+q_knots_trimmed, u_knots_trimmed = prob_rrt.get_trimmed_q_and_u_knots_to_goal()
+q_vis.publish_trajectory(q_knots_trimmed, h=rrt_params.h)
+
 d_batch = prob_rrt.calc_distance_batch(prob_rrt.rrt_params.goal)
 node_id_closest = np.argmin(d_batch)
 print("closest distance to goal", d_batch[node_id_closest])

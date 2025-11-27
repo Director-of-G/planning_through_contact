@@ -65,6 +65,7 @@ class IrsMpcQuasistatic:
 
         # QuasistaticSimParameters
         self.sim_params = self.get_q_sim_params(self.irs_mpc_params)
+        self.sim_params.use_free_solvers = True
         # rollout
         # Not used if self.irs_mpc_params.rollout_forward_dynamics_mode is None.
         self.sim_params_rollout = copy.deepcopy(self.sim_params)
