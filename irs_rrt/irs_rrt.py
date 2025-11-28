@@ -19,7 +19,10 @@ from irs_mpc2.irs_mpc_params import (
     kAnalyticSmoothingModes,
     kSmoothingMode2ForwardDynamicsModeMap,
 )
-from irs_rrt.allegro_3d_rpy_helper import convert_state_quat_to_rpy
+from irs_rrt.allegro_3d_rpy_helper import (
+    convert_state_quat_to_rpy,
+    quat_angle_difference
+)
 
 from qsim.simulator import QuasistaticSimulator, InternalVisualizationType
 from qsim_cpp import QuasistaticSimulatorCpp
@@ -315,6 +318,21 @@ class IrsRrt(Rrt):
         metric_batch = np.einsum("Bi,Bi -> B", int_batch, error_batch)
 
         return metric_batch
+    
+    def calc_distance_batch_quat_diff(
+        self, q_query: np.ndarray, n_nodes: int, is_q_u_only: bool
+    ):
+        # breakpoint()
+        if is_q_u_only:
+            q_query = q_query[self.q_u_indices_into_x]
+        # B x n
+        mu_batch = self.get_chat_matrix_up_to(n_nodes, is_q_u_only)
+        metric_batch = np.abs(quat_angle_difference(
+            q_query[self.irs_rrt_3d.quat_ind],
+            mu_batch[:, self.irs_rrt_3d.quat_ind],
+        ))
+
+        return metric_batch
 
     def calc_pairwise_distance_batch_local(
         self, q_query_batch: np.ndarray, n_nodes: int, is_q_u_only: bool
@@ -426,7 +444,7 @@ class IrsRrt(Rrt):
 
     @staticmethod
     def make_from_pickled_tree(
-        tree: networkx.DiGraph, internal_vis: InternalVisualizationType
+        tree: networkx.DiGraph, internal_vis: InternalVisualizationType,
     ):
         # Factory method for making an IrsRrt object from a pickled tree.
         q_model_path = IrsRrt.load_q_model_path(tree)

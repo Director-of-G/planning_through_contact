@@ -19,7 +19,7 @@ from scipy.spatial.transform import Rotation as R
 
 q_goal_path = '/home/jyp/research/inhand_manipulation/ros2_ws/src/inhand_lowlevel/leap_ros2/scripts/journal/data/quat_targets-250318.npy'
 q_goal_data = np.load(q_goal_path, allow_pickle=True)
-goal_idx = 19
+goal_idx = 16
 
 # %%
 q_parser = QuasistaticParser(q_model_path)
@@ -75,7 +75,7 @@ joint_limits = {
 rrt_params = IrsRrtProjectionParams(q_model_path, joint_limits)
 rrt_params.smoothing_mode = SmoothingMode.k1AnalyticIcecream
 rrt_params.root_node = IrsNode(convert_state_rpy_to_quat(q0))
-rrt_params.max_size = 5000
+rrt_params.max_size = 1000
 rrt_params.goal = np.insert(np.copy(q0), 0, 0)
 # rrt_params.goal[:4] = R.from_euler('xyz', [0, 0, np.pi/2]).as_quat()[[3, 0, 1, 2]]
 rrt_params.goal[:4] = q_goal_data[goal_idx]
@@ -100,7 +100,7 @@ use_free_solvers = True
 rrt_params.use_free_solvers = use_free_solvers
 contact_sampler.sim_params.use_free_solvers = use_free_solvers
 # %% draw the goals
-for i in range(5):
+for i in range(1):
     prob_rrt = IrsRrtProjection3DRPY(rrt_params, contact_sampler, q_sim, q_sim_py)
 
     q_vis.draw_object_triad(
@@ -118,10 +118,10 @@ for i in range(5):
     q_knots_rpy_trimmed = [convert_state_quat_to_rpy(q) for q in q_knots_trimmed]
     q_knots_rpy_trimmed = np.array(q_knots_rpy_trimmed)
 
-    breakpoint()
     q_vis.publish_trajectory(q_knots_rpy_trimmed, h=rrt_params.h)
 
     # %%
+    breakpoint()
     prob_rrt.save_tree(
         os.path.join(
             data_folder, "randomized", f"tree_{rrt_params.max_size}_{i}.pkl"

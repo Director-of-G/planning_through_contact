@@ -16,7 +16,7 @@ robot_name = "allegro_hand_right"
 object_name = "sphere"
 
 # data collection.
-data_folder = "ptc_data/allegro_hand"
+data_folder = "ptc_data/allegro_hand_sphere_rpy"
 
 # Stabilization.
 controller_params = ControllerParams(

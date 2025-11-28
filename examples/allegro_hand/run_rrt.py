@@ -67,12 +67,9 @@ joint_limits = {
     # this slightly more consistent.
     idx_u: np.array(
         [
-            # [-0.1, 0.1],
-            # [-0.1, 0.1],
-            # [-0.1, np.pi + 0.1],
-            [-np.pi, np.pi],        # roll
-            [-np.pi/2, np.pi/2],    # pitch
-            [-np.pi, np.pi],        # yaw
+            [-0.1, 0.1],
+            [-0.1, 0.1],
+            [-0.1, np.pi + 0.1],
             [0, 0],
             [-0.086, -0.075],
             [-0.005, 0.005],
@@ -86,11 +83,11 @@ joint_limits = {
 rrt_params = IrsRrtProjectionParams(q_model_path, joint_limits)
 rrt_params.smoothing_mode = SmoothingMode.k1AnalyticIcecream
 rrt_params.root_node = IrsNode(q0)
-rrt_params.max_size = 2000
+rrt_params.max_size = 1000
 rrt_params.goal = np.copy(q0)
-# Q_WB_d = RollPitchYaw(0, 0, np.pi).ToQuaternion()
-Q_WB_d = RollPitchYaw(np.pi, -np.pi/2, -np.pi).ToQuaternion()
-rrt_params.goal[q_sim.get_q_u_indices_into_q()[:4]] = q_goal_data[goal_idx]
+Q_WB_d = RollPitchYaw(0, 0, np.pi/2).ToQuaternion()
+# Q_WB_d = RollPitchYaw(np.pi, -np.pi/2, -np.pi).ToQuaternion()
+rrt_params.goal[q_sim.get_q_u_indices_into_q()[:4]] = Q_WB_d.wxyz()
 rrt_params.termination_tolerance = 0.01  # used in irs_rrt.iterate() as cost
 # threshold.
 rrt_params.goal_as_subgoal_prob = 0.3
@@ -112,7 +109,7 @@ use_free_solvers = True
 rrt_params.use_free_solvers = use_free_solvers
 contact_sampler.sim_params.use_free_solvers = use_free_solvers
 # %% draw the goals
-for i in range(5):
+for i in range(1):
     prob_rrt = IrsRrtProjection3D(rrt_params, contact_sampler, q_sim, q_sim_py)
 
     q_vis.draw_object_triad(

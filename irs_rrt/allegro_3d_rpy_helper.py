@@ -24,6 +24,16 @@ def convert_state_quat_to_rpy(state_quat):
     
     return state_rpy
 
+def convert_batch_state_quat_to_rpy(state_quat):
+    """
+        state_quat: [object_state(quat, 4), allegro_state(16,)]
+    """
+    state_rpy = np.zeros((state_quat.shape[0], state_quat.shape[1]-1))
+    state_rpy[:, :3] = R.from_quat(convert_quat_wxyz_to_xyzw(state_quat[:, :4], batch_mode=True)).as_euler('xyz')
+    state_rpy[:, 3:] = state_quat[:, 4:]
+    
+    return state_rpy
+
 def convert_state_rpy_to_quat(state_rpy):
     """
         state_rpy: [object_state(rpy, 3), allegro_state(16,)]
@@ -31,6 +41,16 @@ def convert_state_rpy_to_quat(state_rpy):
     state_quat = np.zeros(state_rpy.shape[0]+1)
     state_quat[:4] = convert_quat_xyzw_to_wxyz(R.from_euler('xyz', state_rpy[:3]).as_quat())
     state_quat[4:] = state_rpy[3:]
+
+    return state_quat
+
+def convert_batch_state_rpy_to_quat(state_rpy):
+    """
+        state_rpy: [object_state(rpy, 3), allegro_state(16,)]
+    """
+    state_quat = np.zeros((state_rpy.shape[0], state_rpy.shape[1]+1))
+    state_quat[:, :4] = convert_quat_xyzw_to_wxyz(R.from_euler('xyz', state_rpy[:, :3]).as_quat(), batch_mode=True)
+    state_quat[:, 4:] = state_rpy[:, 3:]
 
     return state_quat
 
@@ -81,6 +101,74 @@ def convert_Bhat_rpy_to_quat(Bhat_rpy, state_quat):
     Bhat_quat = left_mat @ Bhat_rpy
 
     return Bhat_quat
+
+def convert_Ahat_and_Bhat_rpy_to_quat(Ahat_rpy, Bhat_rpy, state_quat):
+    ori_slc_ddp = slice(0, 4)
+    ori_slc_cqdc = slice(0, 3)
+
+    ndofs_before_ori = 0
+    n_dofs_after_ori = 16
+
+    # calc omega <--> qdot projection matrices
+    left_mat = np.zeros((20, 19))
+    right_mat = np.zeros((19, 20))
+
+    left_mat[ori_slc_ddp, ori_slc_cqdc] = CalcNW2Qdot(state_quat[ori_slc_ddp])
+    left_mat[:ori_slc_ddp.start, :ori_slc_cqdc.start] = np.eye(ndofs_before_ori)
+    left_mat[ori_slc_ddp.stop:, ori_slc_cqdc.stop:] = np.eye(n_dofs_after_ori)
+
+    right_mat[ori_slc_cqdc, ori_slc_ddp] = CalcNQdot2W(state_quat[ori_slc_ddp])
+    right_mat[:ori_slc_cqdc.start, :ori_slc_ddp.start] = np.eye(ndofs_before_ori)
+    right_mat[ori_slc_cqdc.stop:, ori_slc_ddp.stop:] = np.eye(n_dofs_after_ori)
+
+    Ahat_quat = left_mat @ Ahat_rpy @ right_mat
+    Bhat_quat = left_mat @ Bhat_rpy
+
+    return Ahat_quat, Bhat_quat
+
+def convert_batch_Bhat_rpy_to_quat(Bhat_rpy_list, state_quat):
+    """
+    Batch version of convert_Bhat_rpy_to_quat.
+
+    Bhat_rpy_list: list of (20, K) matrices, length = B
+    state_quat: (B, 4)
+    """
+
+    B = len(Bhat_rpy_list)
+    assert state_quat.shape[0] == B
+
+    ori_slc_ddp = slice(0, 4)
+    ori_slc_cqdc = slice(0, 3)
+
+    ndofs_before_ori = 0
+    n_dofs_after_ori = 16
+
+    Bhat_quat_list = []
+
+    for i in range(B):
+        Bhat_rpy = Bhat_rpy_list[i]
+        q = state_quat[i]   # (4,)
+
+        # Build projection matrices
+        left_mat = np.zeros((20, 19))
+        right_mat = np.zeros((19, 20))
+
+        # Fill orientation block
+        left_mat[ori_slc_ddp, ori_slc_cqdc] = CalcNW2Qdot(q)
+        right_mat[ori_slc_cqdc, ori_slc_ddp] = CalcNQdot2W(q)
+
+        # Identity before and after orientation block
+        left_mat[:ori_slc_ddp.start, :ori_slc_cqdc.start] = np.eye(ndofs_before_ori)
+        left_mat[ori_slc_ddp.stop:, ori_slc_cqdc.stop:] = np.eye(n_dofs_after_ori)
+
+        right_mat[:ori_slc_cqdc.start, :ori_slc_ddp.start] = np.eye(ndofs_before_ori)
+        right_mat[ori_slc_cqdc.stop:, ori_slc_ddp.stop:] = np.eye(n_dofs_after_ori)
+
+        # Compute Bhat_quat = left_mat @ Bhat_rpy
+        Bhat_quat = left_mat @ Bhat_rpy
+        Bhat_quat_list.append(Bhat_quat)
+
+    return Bhat_quat_list
 
 def quat_angle_difference(query_quat, target_quat):
     """

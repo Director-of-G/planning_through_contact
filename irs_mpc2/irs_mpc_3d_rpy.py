@@ -26,11 +26,19 @@ from .irs_mpc_params import (
     kAnalyticSmoothingModes,
     k0RandomizedSmoothingModes,
 )
+from irs_rrt.allegro_3d_rpy_helper import (
+    convert_state_quat_to_rpy,
+    convert_state_rpy_to_quat,
+    convert_batch_state_quat_to_rpy,
+    convert_batch_state_rpy_to_quat,
+    convert_Bhat_rpy_to_quat,
+    convert_batch_Bhat_rpy_to_quat
+)
 from .quasistatic_visualizer import QuasistaticVisualizer
 from .mpc import solve_mpc
 
 
-class IrsMpcQuasistatic:
+class IrsMpc3DRPYQuasistatic:
     def __init__(
         self,
         q_sim: QuasistaticSimulatorCpp,
@@ -47,14 +55,18 @@ class IrsMpcQuasistatic:
         self.solver = OsqpSolver()
 
         # unpack various parameters for convenience.
-        self.dim_x = self.q_sim.get_plant().num_positions()
+        self.dim_x = self.q_sim.get_plant().num_positions() + 1
         self.dim_u = self.q_sim.num_actuated_dofs()
-        self.indices_u_into_x = self.q_sim.get_q_a_indices_into_q()
+        self.indices_u_into_x = list(range(4, 4 + self.dim_u))
         # elements of Q_dict, Qd_dict and R_dict are the diagonals of the Q,
         # Qd and R matrices.
         self.Q_dict = params.Q_dict
         self.Qd_dict = params.Qd_dict
         self.R_dict = params.R_dict
+
+        self.model_idx_u = None
+        self.model_idx_a = None
+
         # the matrices are needed when adding quadratic costs to MPC.
         self.Q = self.get_Q_mat_from_Q_dict(self.Q_dict)
         self.Qd = self.get_Q_mat_from_Q_dict(self.Qd_dict)
@@ -131,7 +143,14 @@ class IrsMpcQuasistatic:
     ):
         Q = np.eye(self.dim_x)
         for model, idx in self.q_sim.get_position_indices().items():
-            Q[idx, idx] = Q_dict[model]
+            if len(idx) == 3:   # object's rpy
+                idx = [0, 1, 2, 3]
+                Q[idx, idx] = Q_dict[model]
+                self.model_idx_u = model
+            elif len(idx) == 16:    # allegro's joints
+                idx = [i+1 for i in idx]
+                Q[idx, idx] = Q_dict[model]
+                self.model_idx_a = model
         return Q
 
     def get_R_mat_from_R_dict(
@@ -146,6 +165,12 @@ class IrsMpcQuasistatic:
             )
             i_start += n_v_i
         return R
+    
+    def get_quat_state_dict_from_array(self, state):
+        return {
+            self.model_idx_u: state[0:4],
+            self.model_idx_a: state[4:],
+        }
 
     @staticmethod
     def calc_Q_cost(
@@ -171,8 +196,8 @@ class IrsMpcQuasistatic:
         models_a = self.q_sim.get_actuated_models()
 
         # Final cost Qd.
-        x_dict = self.q_sim.get_q_dict_from_vec(x_trj[-1])
-        xd_dict = self.q_sim.get_q_dict_from_vec(self.x_trj_d[-1])
+        x_dict = self.get_quat_state_dict_from_array(x_trj[-1])
+        xd_dict = self.get_quat_state_dict_from_array(self.x_trj_d[-1])
         cost_Qu_final = self.calc_Q_cost(
             models_list=models_u,
             x_dict=x_dict,
@@ -191,8 +216,8 @@ class IrsMpcQuasistatic:
         cost_Qa = 0.0
         cost_R = 0.0
         for t in range(T):
-            x_dict = self.q_sim.get_q_dict_from_vec(x_trj[t])
-            xd_dict = self.q_sim.get_q_dict_from_vec(self.x_trj_d[t])
+            x_dict = self.get_quat_state_dict_from_array(x_trj[t])
+            xd_dict = self.get_quat_state_dict_from_array(self.x_trj_d[t])
             # Q cost.
             cost_Qu += self.calc_Q_cost(
                 models_list=models_u,
@@ -339,21 +364,7 @@ class IrsMpcQuasistatic:
         sim_p = copy.deepcopy(self.sim_params)
         sim_p.calc_contact_forces = False
         if self.irs_mpc_params.smoothing_mode in k1RandomizedSmoothingModes:
-            std_u = self.irs_mpc_params.calc_std_u(
-                self.irs_mpc_params.std_u_initial, self.current_iter + 1
-            )
-            (
-                A_trj,
-                B_trj,
-                x_next_smooth_trj,
-            ) = self.q_sim_batch.calc_bundled_ABc_trj(
-                x_trj,
-                u_trj,
-                std_u,
-                sim_p,
-                self.irs_mpc_params.n_samples_randomized,
-                None,
-            )
+            raise NotImplementedError
         elif self.irs_mpc_params.smoothing_mode in kAnalyticSmoothingModes:
             sim_p.log_barrier_weight = (
                 self.irs_mpc_params.calc_log_barrier_weight(
@@ -366,32 +377,15 @@ class IrsMpcQuasistatic:
                 A_trj,
                 B_trj,
                 is_valid,
-            ) = self.q_sim_batch.calc_dynamics_parallel(x_trj, u_trj, sim_p)
+            ) = self.q_sim_batch.calc_dynamics_parallel(convert_batch_state_quat_to_rpy(x_trj), u_trj, sim_p)
+
+            x_next_smooth_trj = convert_batch_state_rpy_to_quat(x_next_smooth_trj)
+            B_trj = convert_batch_Bhat_rpy_to_quat(B_trj, x_trj)
 
             if not all(is_valid):
                 raise RuntimeError("analytic smoothing failed.")
         elif self.irs_mpc_params.smoothing_mode in k0RandomizedSmoothingModes:
-            std_u = self.irs_mpc_params.calc_std_u(
-                self.irs_mpc_params.std_u_initial, self.current_iter + 1
-            )
-            sim_p.gradient_mode = GradientMode.kNone
-            x_next_smooth_trj = np.zeros((T + 1, self.dim_x))
-            A_trj = np.zeros((T, self.dim_x, self.dim_x))
-            B_trj = np.zeros((T, self.dim_x, self.dim_u))
-
-            for t in range(T):
-                # TODO: handle irs_mpc_params.use_A = True.
-                Bhat, x_next_smooth = self.calc_B_zero_order(
-                    x_trj[t],
-                    u_trj[t],
-                    self.irs_mpc_params.n_samples_randomized,
-                    std_u,
-                    sim_p,
-                )
-                x_next_smooth_trj[t] = x_next_smooth
-
-                A_trj[t] = np.eye(self.dim_x)
-                B_trj[t] = Bhat
+            raise NotImplementedError
 
         else:
             raise NotImplementedError
@@ -411,9 +405,9 @@ class IrsMpcQuasistatic:
         c_trj = np.zeros((T, self.dim_x))
         for t in range(T):
             if self.irs_mpc_params.rollout_forward_dynamics_mode:
-                x_next_nominal = self.q_sim.calc_dynamics(
-                    x_trj[t], u_trj[t], self.sim_params_rollout
-                )
+                x_next_nominal = convert_state_rpy_to_quat(self.q_sim.calc_dynamics(
+                    convert_state_quat_to_rpy(x_trj[t]), u_trj[t], self.sim_params_rollout
+                ))
             else:
                 x_next_nominal = x_next_smooth_trj[t]
 
@@ -435,30 +429,7 @@ class IrsMpcQuasistatic:
         sim_p = copy.deepcopy(self.sim_params)
         sim_p.calc_contact_forces = False
         if self.irs_mpc_params.smoothing_mode in k1RandomizedSmoothingModes:
-            std_u = self.irs_mpc_params.calc_std_u(
-                self.irs_mpc_params.std_u_initial, self.current_iter + 1
-            )
-            n_samples = self.irs_mpc_params.n_samples_randomized
-            x_batch = np.zeros((n_samples, self.dim_x))
-            x_batch[:] = x_nominal
-            u_batch = np.random.normal(
-                u_nominal, std_u, (n_samples, self.dim_u)
-            )
-            (
-                x_next_batch,
-                A_batch,
-                B_batch,
-                is_valid,
-            ) = self.q_sim_batch.calc_dynamics_parallel(x_batch, u_batch, sim_p)
-
-            if self.irs_mpc_params.use_A:
-                A_batch = np.array(A_batch)
-                A = A_batch[is_valid].mean(axis=0)
-
-            B_batch = np.array(B_batch)
-            B = B_batch[is_valid].mean(axis=0)
-            x_next_smooth = x_next_batch[is_valid].mean(axis=0)
-
+            raise NotImplementedError
         elif self.irs_mpc_params.smoothing_mode in kAnalyticSmoothingModes:
             sim_p.log_barrier_weight = (
                 self.irs_mpc_params.calc_log_barrier_weight(
@@ -467,37 +438,18 @@ class IrsMpcQuasistatic:
                 )
             )
 
-            x_next_smooth = self.q_sim.calc_dynamics(
-                x_nominal, u_nominal, sim_p
+            x_next_smooth = convert_state_rpy_to_quat(
+                self.q_sim.calc_dynamics(
+                    convert_state_quat_to_rpy(x_nominal), u_nominal, sim_p
+                )
             )
             if self.irs_mpc_params.use_A:
-                A = self.q_sim.get_Dq_nextDq()
+                raise NotImplementedError
             B = self.q_sim.get_Dq_nextDqa_cmd()
+            B = convert_Bhat_rpy_to_quat(B, x_nominal)
 
         elif self.irs_mpc_params.smoothing_mode in k0RandomizedSmoothingModes:
-            std_u = self.irs_mpc_params.calc_std_u(
-                self.irs_mpc_params.std_u_initial, self.current_iter + 1
-            )
-            sim_p.gradient_mode = GradientMode.kNone
-
-            if self.irs_mpc_params.use_A:
-                A, B, x_next_smooth = self.calc_AB_zero_order(
-                    x_nominal,
-                    u_nominal,
-                    self.irs_mpc_params.n_samples_randomized,
-                    std_u,
-                    sim_p,
-                )
-
-            else:
-                B, x_next_smooth = self.calc_B_zero_order(
-                    x_nominal,
-                    u_nominal,
-                    self.irs_mpc_params.n_samples_randomized,
-                    std_u,
-                    sim_p,
-                )
-
+            raise NotImplementedError
         else:
             raise NotImplementedError
 
@@ -508,8 +460,10 @@ class IrsMpcQuasistatic:
 
         # c
         if self.irs_mpc_params.rollout_forward_dynamics_mode:
-            x_next_nominal = self.q_sim.calc_dynamics(
-                x_nominal, u_nominal, self.sim_params_rollout
+            x_next_nominal = convert_state_rpy_to_quat(
+                self.q_sim.calc_dynamics(
+                    convert_state_quat_to_rpy(x_nominal), u_nominal, self.sim_params_rollout
+                )
             )
         else:
             x_next_nominal = x_next_smooth
@@ -612,33 +566,33 @@ class IrsMpcQuasistatic:
         sim_p.gradient_mode = GradientMode.kNone
 
         for t in range(T):
-            x_trj[t + 1] = self.q_sim.calc_dynamics(x_trj[t], u_trj[t], sim_p)
+            x_trj[t + 1] = convert_state_rpy_to_quat(self.q_sim.calc_dynamics(convert_state_quat_to_rpy(x_trj[t]), u_trj[t], sim_p))
 
         return x_trj
 
-    @staticmethod
-    def rollout_smaller_steps(
-        x0: np.ndarray,
-        u_trj: np.ndarray,
-        h_small: float,
-        n_steps_per_h: int,
-        q_sim: QuasistaticSimulatorCpp,
-        sim_params: QuasistaticSimParameters,
-    ):
-        T = len(u_trj)
-        sim_params.h = h_small
+    # @staticmethod
+    # def rollout_smaller_steps(
+    #     x0: np.ndarray,
+    #     u_trj: np.ndarray,
+    #     h_small: float,
+    #     n_steps_per_h: int,
+    #     q_sim: QuasistaticSimulatorCpp,
+    #     sim_params: QuasistaticSimParameters,
+    # ):
+    #     T = len(u_trj)
+    #     sim_params.h = h_small
 
-        q_trj_small = np.zeros((T * n_steps_per_h + 1, len(x0)))
-        q_trj_small[0] = x0
-        u_trj_small = IrsMpcQuasistatic.calc_u_trj_small(
-            u_trj, h_small, n_steps_per_h
-        )
-        for t in range(n_steps_per_h * T):
-            q_trj_small[t + 1] = q_sim.calc_dynamics(
-                q_trj_small[t], u_trj_small[t], sim_params
-            )
+    #     q_trj_small = np.zeros((T * n_steps_per_h + 1, len(x0)))
+    #     q_trj_small[0] = x0
+    #     u_trj_small = IrsMpcQuasistatic.calc_u_trj_small(
+    #         u_trj, h_small, n_steps_per_h
+    #     )
+    #     for t in range(n_steps_per_h * T):
+    #         q_trj_small[t + 1] = q_sim.calc_dynamics(
+    #             q_trj_small[t], u_trj_small[t], sim_params
+    #         )
 
-        return q_trj_small, u_trj_small
+    #     return q_trj_small, u_trj_small
 
     @staticmethod
     def calc_u_trj_small(u_trj: np.ndarray, h_small: float, n_steps_per_h: int):
@@ -720,7 +674,7 @@ class IrsMpcQuasistatic:
         Each new knot corresponds to a the new, smaller time step h_small,
          which reduces the effect of "hydroplaning" in Anitescu's model.
         """
-        indices_q_u_into_x = self.q_sim.get_q_u_indices_into_q()
+        indices_q_u_into_x = [0, 1, 2, 3]
         q_u_d = q_final[indices_q_u_into_x]
         q_d = np.copy(q0)
         q_d[indices_q_u_into_x] = q_u_d
@@ -728,7 +682,7 @@ class IrsMpcQuasistatic:
         T = len(u_trj) * n_steps_per_h
         q_trj_d = np.tile(q_d, (T + 1, 1))
 
-        u_trj_small = IrsMpcQuasistatic.calc_u_trj_small(
+        u_trj_small = IrsMpc3DRPYQuasistatic.calc_u_trj_small(
             u_trj, h_small, n_steps_per_h
         )
 

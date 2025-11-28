@@ -32,8 +32,9 @@ from allegro_hand_setup import robot_name, object_name
 pickled_tree_path = os.path.join(
     os.path.dirname(irs_rrt.__file__),
     "..",
-    "examples",
+    "ptc_data",
     "allegro_hand",
+    "randomized",
     "tree_1000_0.pkl",
 )
 

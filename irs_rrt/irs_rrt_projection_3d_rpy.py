@@ -1,10 +1,12 @@
 import numpy as np
 from tqdm import tqdm
+import networkx
 
 from pydrake.all import RollPitchYaw, Quaternion, RotationMatrix
 
-from qsim.simulator import QuasistaticSimulator
+from qsim.simulator import QuasistaticSimulator, InternalVisualizationType
 from qsim_cpp import QuasistaticSimulatorCpp
+from qsim.parser import QuasistaticParser
 
 from irs_rrt.rrt_params import IrsRrtProjectionParams
 from irs_rrt.irs_rrt_3d_rpy import IrsRrt3DRPY
@@ -15,8 +17,8 @@ from irs_rrt.rrt_base import Node
 from irs_rrt.allegro_3d_rpy_helper import (
     convert_state_quat_to_rpy,
     convert_state_rpy_to_quat,
-    quat_angle_difference
 )
+from irs_rrt.contact_sampler_allegro import AllegroHandContactSampler
 
 from scipy.spatial.transform import Rotation as R, Slerp
 
@@ -127,21 +129,6 @@ class IrsRrtProjection3DRPY(IrsRrtProjection):
 
         return child_node, edge
     
-    def calc_distance_batch_quat_diff(
-        self, q_query: np.ndarray, n_nodes: int, is_q_u_only: bool
-    ):
-        # breakpoint()
-        if is_q_u_only:
-            q_query = q_query[self.q_u_indices_into_x]
-        # B x n
-        mu_batch = self.get_chat_matrix_up_to(n_nodes, is_q_u_only)
-        metric_batch = np.abs(quat_angle_difference(
-            q_query[self.irs_rrt_3d.quat_ind],
-            mu_batch[:, self.irs_rrt_3d.quat_ind],
-        ))
-
-        return metric_batch
-    
     def iterate(self):
         """
         Main method for iteration.
@@ -200,3 +187,38 @@ class IrsRrtProjection3DRPY(IrsRrtProjection):
                 break
 
         pbar.close()
+
+    @staticmethod
+    def make_from_pickled_tree(
+        tree: networkx.DiGraph, internal_vis: InternalVisualizationType,
+    ):
+        # Factory method for making an IrsRrt object from a pickled tree.
+        q_model_path = IrsRrt.load_q_model_path(tree)
+        parser = QuasistaticParser(q_model_path)
+
+        rrt_param = tree.graph["irs_rrt_params"]
+        rrt_param.q_model_path = q_model_path
+        parser.set_sim_params(**tree.graph["q_sim_params"])
+
+        q_sim = parser.make_simulator_cpp()
+        q_sim_py = parser.make_simulator_py(internal_vis=internal_vis)
+        contact_sampler = AllegroHandContactSampler(q_sim, q_sim_py)
+
+        prob_rrt = IrsRrtProjection3DRPY(
+            rrt_params=rrt_param,
+            contact_sampler=contact_sampler,
+            q_sim=parser.make_simulator_cpp(),
+            q_sim_py=parser.make_simulator_py(internal_vis=internal_vis),
+        )
+        prob_rrt.graph = tree
+        prob_rrt.size = tree.number_of_nodes()
+
+        for i_node in tree.nodes:
+            node = tree.nodes[i_node]["node"]
+            prob_rrt.Bhat_tensor[i_node] = node.Bhat
+            prob_rrt.covinv_tensor[i_node] = node.covinv
+            prob_rrt.chat_matrix[i_node] = node.chat
+            prob_rrt.covinv_u_tensor[i_node] = node.covinv_u
+            prob_rrt.q_matrix[i_node] = node.q
+
+        return prob_rrt

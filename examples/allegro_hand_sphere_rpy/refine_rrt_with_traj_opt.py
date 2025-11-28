@@ -18,13 +18,19 @@ from qsim_cpp import ForwardDynamicsMode, GradientMode
 from qsim.parser import QuasistaticParser
 
 import irs_rrt
-from irs_rrt.irs_rrt import IrsRrt
+# from irs_rrt.irs_rrt import IrsRrt
+from irs_rrt.irs_rrt_projection_3d_rpy import IrsRrtProjection3DRPY
 from irs_mpc2.quasistatic_visualizer import (
     QuasistaticVisualizer,
     InternalVisualizationType,
 )
+from irs_rrt.allegro_3d_rpy_helper import (
+    convert_state_quat_to_rpy,
+    convert_state_rpy_to_quat
+)
 
-from irs_mpc2.irs_mpc import IrsMpcQuasistatic
+# from irs_mpc2.irs_mpc import IrsMpcQuasistatic
+from irs_mpc2.irs_mpc_3d_rpy import IrsMpc3DRPYQuasistatic
 from irs_mpc2.irs_mpc_params import SmoothingMode, IrsMpcQuasistaticParameters
 from allegro_hand_setup import robot_name, object_name
 
@@ -32,15 +38,16 @@ from allegro_hand_setup import robot_name, object_name
 pickled_tree_path = os.path.join(
     os.path.dirname(irs_rrt.__file__),
     "..",
-    "examples",
-    "allegro_hand",
+    "ptc_data",
+    "allegro_hand_sphere_rpy",
+    "randomized",
     "tree_1000_0.pkl",
 )
 
 with open(pickled_tree_path, "rb") as f:
     tree = pickle.load(f)
 
-prob_rrt = IrsRrt.make_from_pickled_tree(
+prob_rrt = IrsRrtProjection3DRPY.make_from_pickled_tree(
     tree, internal_vis=InternalVisualizationType.Cpp
 )
 
@@ -48,9 +55,9 @@ q_sim, q_sim_py = prob_rrt.q_sim, prob_rrt.q_sim_py
 q_vis = QuasistaticVisualizer(q_sim=q_sim, q_sim_py=q_sim_py)
 
 # get goal and some problem data from RRT parameters.
-q_u_goal = prob_rrt.rrt_params.goal[q_sim.get_q_u_indices_into_q()]
-Q_WB_d = Quaternion(q_u_goal[:4])
-p_WB_d = q_u_goal[4:]
+q_u_goal = prob_rrt.rrt_params.goal[:4]
+Q_WB_d = Quaternion(q_u_goal)
+p_WB_d = np.array([-0.06, 0.0, 0.072])
 dim_q = prob_rrt.dim_q
 dim_u = q_sim.num_actuated_dofs()
 
@@ -71,9 +78,12 @@ q_knots_trimmed, u_knots_trimmed = prob_rrt.get_trimmed_q_and_u_knots_to_goal()
 # split trajectory into segments according to re-grasps.
 segments = prob_rrt.get_regrasp_segments(u_knots_trimmed)
 
+q_knots_rpy_trimmed = [convert_state_quat_to_rpy(q) for q in q_knots_trimmed]
+q_knots_rpy_trimmed = np.array(q_knots_rpy_trimmed)
+
 # %% see the segments.
 prob_rrt.print_segments_displacements(q_knots_trimmed, segments)
-q_vis.publish_trajectory(q_knots_trimmed, prob_rrt.rrt_params.h)
+q_vis.publish_trajectory(q_knots_rpy_trimmed, prob_rrt.rrt_params.h)
 
 # %% determining h_small and n_steps_per_h from simulating a segment.
 h_small = 0.01
@@ -81,8 +91,8 @@ h_small = 0.01
 # %% IrsMpc
 q_parser = QuasistaticParser(prob_rrt.rrt_params.q_model_path)
 plant = q_sim.get_plant()
-indices_q_u_into_x = q_sim.get_q_u_indices_into_q()
-indices_q_a_into_x = q_sim.get_q_a_indices_into_q()
+indices_q_u_into_x = [0, 1, 2, 3]
+indices_q_a_into_x = list(range(4, 4+dim_u))
 idx_a = plant.GetModelInstanceByName(robot_name)
 idx_u = plant.GetModelInstanceByName(object_name)
 
@@ -94,7 +104,7 @@ impc_params.enforce_joint_limits = (
 
 impc_params.h = h_small
 impc_params.Q_dict = {
-    idx_u: np.array([10, 10, 10, 10, 50, 50, 50.0]),
+    idx_u: np.array([10, 10, 10, 10]),  # quaternion
     idx_a: np.ones(dim_u) * 1e-3,
 }
 
@@ -133,7 +143,8 @@ impc_params.calc_log_barrier_weight = lambda kappa0, i: kappa0 * (base**i)
 
 impc_params.use_A = False
 impc_params.rollout_forward_dynamics_mode = ForwardDynamicsMode.kSocpMp
-prob_mpc = IrsMpcQuasistatic(q_sim=q_sim, parser=q_parser, params=impc_params)
+breakpoint()
+prob_mpc = IrsMpc3DRPYQuasistatic(q_sim=q_sim, parser=q_parser, params=impc_params)
 
 # %% traj-opt for segment
 sim_params_projection = copy.deepcopy(prob_rrt.sim_params)
@@ -141,7 +152,7 @@ sim_params_projection.unactuated_mass_scale = 1e-4
 
 
 def project_to_non_penetration(q: np.ndarray):
-    return q_sim.calc_dynamics(q, q[indices_q_a_into_x], sim_params_projection)
+    return q_sim.calc_dynamics(q, q[-16:], sim_params_projection)
 
 
 q_trj_optimized_list = []
@@ -152,7 +163,9 @@ input("Starting refinement...")
 for i_s, (t_start, t_end) in enumerate(sub_segments):
     u_trj = u_knots_trimmed[t_start:t_end]
     q_trj = q_knots_trimmed[t_start : t_end + 1]
-    q_vis.publish_trajectory(q_trj, prob_rrt.rrt_params.h)
+
+    q_traj_rpy = [convert_state_quat_to_rpy(q) for q in q_trj]
+    q_vis.publish_trajectory(q_traj_rpy, prob_rrt.rrt_params.h)
 
     q0 = np.array(q_trj[0])
     if len(q_trj_optimized_list) > 0:
@@ -160,7 +173,8 @@ for i_s, (t_start, t_end) in enumerate(sub_segments):
             -1, indices_q_u_into_x
         ]
         print("qu0 before projection", q0[indices_q_u_into_x])
-        q0 = project_to_non_penetration(q0)
+        q0 = project_to_non_penetration(convert_state_quat_to_rpy(q0))
+        q0 = convert_state_rpy_to_quat(q0)
         print("qu0 after projection", q0[indices_q_u_into_x])
 
     input("Original trajectory segment shown. Press any key to optimize...")
@@ -187,14 +201,18 @@ for i_s, (t_start, t_end) in enumerate(sub_segments):
     q_trj_optimized_list.append(q_trj_optimized)
     u_trj_optimized_list.append(u_trj_optimized)
 
+    q_trj_optimized_rpy = [convert_state_quat_to_rpy(q) for q in q_trj_optimized]
+
     prob_mpc.plot_costs()
-    q_vis.publish_trajectory(q_trj_optimized, h_small)
+    q_vis.publish_trajectory(q_trj_optimized_rpy, h_small)
     print(f"Best trajectory iteration index: {idx_best}")
     input("Optimized trajectory shown. Press any key to go to the next segment")
 
 # %%
 q_trj_optimized_all = prob_rrt.concatenate_traj_list(q_trj_optimized_list)
-q_vis.publish_trajectory(q_trj_optimized_all, 0.1)
+
+q_trj_optimized_all_rpy = [convert_state_quat_to_rpy(q) for q in q_trj_optimized_all]
+q_vis.publish_trajectory(q_trj_optimized_all_rpy, 0.1)
 
 # %% see differences between RRT and optimized trajectories.
 for t, q_trj_optimized in enumerate(q_trj_optimized_list):
@@ -219,6 +237,7 @@ for q_trj, u_trj in zip(q_trj_optimized_list, u_trj_optimized_list):
 q_trj_optimized_trimmed_all = prob_rrt.concatenate_traj_list(
     q_trj_optimized_trimmed_list
 )
+q_trj_optimized_trimmed_all_rpy = [convert_state_quat_to_rpy(q) for q in q_trj_optimized_trimmed_all]
 q_vis.publish_trajectory(q_trj_optimized_trimmed_all, 0.1)
 
 # %%
