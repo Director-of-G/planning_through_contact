@@ -69,7 +69,8 @@ class IrsRrtProjection(IrsRrt):
 
             # 2. Sample closest node to subgoal
             parent_node = self.select_closest_node(
-                subgoal, d_threshold=self.rrt_params.distance_threshold
+                subgoal, d_threshold=self.rrt_params.distance_threshold,
+                print_distance=False,
             )
             if parent_node is None:
                 continue

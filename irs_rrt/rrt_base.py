@@ -174,12 +174,13 @@ class Rrt:
         """
         raise NotImplementedError("This method is virtual.")
 
-    def is_close_to_goal(self):
+    def is_close_to_goal(self, print_distance: bool = False):
         """
         Evaluate termination criteria for RRT using global distance metric.
         """
         dist_batch = self.calc_distance_batch(self.rrt_params.goal)
-        print(np.min(dist_batch))
+        if print_distance:
+            print("Distance to goal:", np.min(dist_batch))
         return np.min(dist_batch) < self.rrt_params.termination_tolerance
 
     def rewire(self, parent_node: Node, child_node: Node):

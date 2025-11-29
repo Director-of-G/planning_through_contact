@@ -163,9 +163,13 @@ class IrsRrtProjection3DRPY(IrsRrtProjection):
 
             # 4. Attempt to rewire a candidate child node.
             if self.rrt_params.rewire:
-                parent_node, child_node, edge = self.rewire(
-                    parent_node, child_node
-                )
+                try:
+                    parent_node, child_node, edge = self.rewire(
+                        parent_node, child_node
+                    )
+                except RuntimeError as e:
+                    print(e)
+                    pass
 
             # 5. Register the new node to the graph.
             try:
@@ -181,12 +185,20 @@ class IrsRrtProjection3DRPY(IrsRrtProjection):
             self.add_edge(edge)
 
             # 6. Check for termination.
-            if self.is_close_to_goal():
+            if self.size % 500 == 0:
+                print_distance=True
+            else:
+                print_distance=False
+            if self.is_close_to_goal(print_distance=print_distance):
                 self.goal_node_idx = child_node.id
                 print("FOUND A PATH TO GOAL!!!!!")
                 break
 
         pbar.close()
+
+        succ = self.is_close_to_goal()
+        
+        return succ
 
     @staticmethod
     def make_from_pickled_tree(
